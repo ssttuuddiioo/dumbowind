@@ -6,13 +6,13 @@ import {
 } from "./letterAtlas";
 
 const MAX_LETTERS = 320;
-const CELL_W = 16;
-const LINE_H = 36;
-const SIZE_TEXT = 28;
-const SIZE_BOID = 18;
+const CELL_W = 40;
+const LINE_H = 90;
+const SIZE_TEXT = 70;
+const SIZE_BOID = 45;
 
 const FADE_IN_MS = 600;
-const SHOW_MS = 3000;
+const SHOW_MS = 1000;
 const DISINTEGRATE_MS = 5000;
 const TOTAL_MS = FADE_IN_MS + SHOW_MS + DISINTEGRATE_MS;
 
@@ -126,7 +126,7 @@ export function createLetters(
   let boundsY = bounds[1];
 
   function layout(text: string, w: number, h: number) {
-    const maxLineWidth = Math.min(w * 0.8, 640);
+    const maxLineWidth = Math.min(w * 0.9, 1600);
     const maxCols = Math.max(8, Math.floor(maxLineWidth / CELL_W));
     const words = text.split(/\s+/).filter(Boolean);
     const lines: string[] = [];
