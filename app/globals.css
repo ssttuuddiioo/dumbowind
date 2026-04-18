@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  background: #0a0a0a;
+  color: #f5f3ee;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    monospace;
+  font-weight: 400;
+  overscroll-behavior: none;
+}
+
+::selection {
+  background: #4169e1;
+  color: #f5f3ee;
+}
+
+textarea {
+  font-family: inherit;
+  font-weight: inherit;
+}
+
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.blink-cursor {
+  display: inline-block;
+  animation: blink 1.1s infinite;
+}
