@@ -85,6 +85,14 @@ export function JournalField() {
             }}
           />
         </div>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!text.trim() || phase !== "field"}
+          className="mt-5 text-sm sm:text-base text-royal hover:opacity-80 transition-opacity disabled:text-bone/25 disabled:cursor-default"
+        >
+          release ↵
+        </button>
       </div>
       <div
         aria-hidden={phase !== "thanks"}
