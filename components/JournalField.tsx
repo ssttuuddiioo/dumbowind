@@ -100,7 +100,7 @@ export function JournalField() {
           phase === "thanks" ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >
-        <p className="text-bone/70 text-base sm:text-lg">thanks.</p>
+        <p className="text-bone/70 text-base sm:text-lg">released.</p>
       </div>
     </div>
   );

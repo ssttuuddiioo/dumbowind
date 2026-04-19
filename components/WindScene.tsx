@@ -107,10 +107,10 @@ export function WindScene() {
       lastTickMs = now;
 
       const t = now * 0.001;
-      const slowX = Math.tanh(baseNoise(0, 0, t * 0.25) * 2.0);
-      const slowY = baseNoise(100, 100, t * 0.2) * 0.7;
-      const gustX = baseNoise(50, 0, t * 1.1) * 0.6;
-      const gustY = baseNoise(0, 50, t * 0.9) * 0.6;
+      const slowX = Math.tanh(baseNoise(0, 0, t * 0.09) * 2.8);
+      const slowY = baseNoise(100, 100, t * 0.08) * 0.35;
+      const gustX = baseNoise(50, 0, t * 0.35) * 0.12;
+      const gustY = baseNoise(0, 50, t * 0.3) * 0.12;
       const wind: [number, number] = [slowX + gustX, slowY + gustY];
       sim.compute(delta * 0.75, t, wind);
 

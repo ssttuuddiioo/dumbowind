@@ -36,9 +36,9 @@ export const velocityShader = /* glsl */ `
   // divergence-free-ish spatial swirl: varies per-position so the
   // flock develops eddies instead of drifting as a rigid block
   vec2 swirl(vec2 p, float t) {
-    float a = sin(p.x * 0.011 + t * 0.6) * cos(p.y * 0.009 - t * 0.45);
-    float b = cos(p.x * 0.008 - t * 0.5) * sin(p.y * 0.012 + t * 0.35);
-    float c = sin((p.x + p.y) * 0.006 + t * 0.25);
+    float a = sin(p.x * 0.009 + t * 0.22) * cos(p.y * 0.007 - t * 0.16);
+    float b = cos(p.x * 0.006 - t * 0.2) * sin(p.y * 0.01 + t * 0.13);
+    float c = sin((p.x + p.y) * 0.005 + t * 0.09);
     return vec2(a + c * 0.4, b - c * 0.4);
   }
 

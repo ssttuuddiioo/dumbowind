@@ -1,20 +1,29 @@
 import * as THREE from "three";
 import {
+  BOID_GLYPH_OFFSET,
   LETTER_GLYPH_COUNT,
-  charIndex,
-  randomBoidGlyphIndex,
 } from "./letterAtlas";
+import { getGlyphSamples } from "./glyphSamples";
 
-const MAX_LETTERS = 320;
-const CELL_W = 40;
-const LINE_H = 90;
-const SIZE_TEXT = 70;
-const SIZE_BOID = 45;
+const MAX_PARTICLES = 8000;
+const CELL_W = 44;
+const LINE_H = 92;
+const VERTICAL_OFFSET = 200;
+const LETTER_SCALE_X = 44;
+const LETTER_SCALE_Y = 62;
+const PARTICLE_SIZE = 5;
+const DOT_GLYPH = BOID_GLYPH_OFFSET + 7;
 
 const FADE_IN_MS = 600;
-const SHOW_MS = 1000;
-const DISINTEGRATE_MS = 5000;
-const TOTAL_MS = FADE_IN_MS + SHOW_MS + DISINTEGRATE_MS;
+const SHOW_MS = 800;
+const SWEEP_MS = 2000;
+const FADE_OUT_MS = 1100;
+const RELEASE_JITTER_MS = 220;
+const TOTAL_MS =
+  FADE_IN_MS + SHOW_MS + SWEEP_MS + FADE_OUT_MS + RELEASE_JITTER_MS;
+
+const IMPULSE_MIN = 1.4;
+const IMPULSE_RANGE = 1.8;
 
 export type LettersHandle = {
   points: THREE.Points;
@@ -45,7 +54,7 @@ const vert = /* glsl */ `
     vAlpha = aAlpha;
     vec2 clip = position.xy / uBounds * 2.0 - 1.0;
     gl_Position = vec4(clip, 0.0, 1.0);
-    gl_PointSize = max(4.0, aSize * uDpr);
+    gl_PointSize = max(2.0, aSize * uDpr);
   }
 `;
 
@@ -74,11 +83,14 @@ export function createLetters(
   dpr: number,
 ): LettersHandle {
   const geom = new THREE.BufferGeometry();
-  const positions = new Float32Array(MAX_LETTERS * 3);
-  const glyph = new Float32Array(MAX_LETTERS);
-  const alpha = new Float32Array(MAX_LETTERS);
-  const size = new Float32Array(MAX_LETTERS);
-  for (let i = 0; i < MAX_LETTERS; i++) size[i] = SIZE_TEXT;
+  const positions = new Float32Array(MAX_PARTICLES * 3);
+  const glyph = new Float32Array(MAX_PARTICLES);
+  const alpha = new Float32Array(MAX_PARTICLES);
+  const size = new Float32Array(MAX_PARTICLES);
+  for (let i = 0; i < MAX_PARTICLES; i++) {
+    size[i] = PARTICLE_SIZE;
+    glyph[i] = DOT_GLYPH;
+  }
 
   const posAttr = new THREE.BufferAttribute(positions, 3);
   const glyphAttr = new THREE.BufferAttribute(glyph, 1);
@@ -98,7 +110,7 @@ export function createLetters(
       uGlyphCount: { value: LETTER_GLYPH_COUNT },
       uBounds: { value: new THREE.Vector2(bounds[0], bounds[1]) },
       uDpr: { value: dpr },
-      uBone: { value: new THREE.Color("#f5f3ee") },
+      uBone: { value: new THREE.Color("#ffffff") },
     },
     transparent: true,
     depthTest: false,
@@ -108,19 +120,17 @@ export function createLetters(
   const points = new THREE.Points(geom, material);
   points.frustumCulled = false;
 
-  // per-particle state (CPU-side)
-  const anchorX = new Float32Array(MAX_LETTERS);
-  const anchorY = new Float32Array(MAX_LETTERS);
-  const posX = new Float32Array(MAX_LETTERS);
-  const posY = new Float32Array(MAX_LETTERS);
-  const velX = new Float32Array(MAX_LETTERS);
-  const velY = new Float32Array(MAX_LETTERS);
-  const spawnMs = new Float32Array(MAX_LETTERS);
-  const flipAtMs = new Float32Array(MAX_LETTERS);
-  const flipGlyph = new Float32Array(MAX_LETTERS);
-  const active = new Uint8Array(MAX_LETTERS);
-  const released = new Uint8Array(MAX_LETTERS);
-  const flipped = new Uint8Array(MAX_LETTERS);
+  const anchorX = new Float32Array(MAX_PARTICLES);
+  const anchorY = new Float32Array(MAX_PARTICLES);
+  const posX = new Float32Array(MAX_PARTICLES);
+  const posY = new Float32Array(MAX_PARTICLES);
+  const velX = new Float32Array(MAX_PARTICLES);
+  const velY = new Float32Array(MAX_PARTICLES);
+  const spawnMs = new Float32Array(MAX_PARTICLES);
+  const releaseMs = new Float32Array(MAX_PARTICLES);
+  const fadeDur = new Float32Array(MAX_PARTICLES);
+  const active = new Uint8Array(MAX_PARTICLES);
+  const released = new Uint8Array(MAX_PARTICLES);
   let count = 0;
   let boundsX = bounds[0];
   let boundsY = bounds[1];
@@ -151,8 +161,7 @@ export function createLetters(
     if (cur) lines.push(cur);
 
     const blockH = lines.length * LINE_H;
-    // y-up coordinate space: top of block sits above center
-    const topY = h / 2 + blockH / 2 - LINE_H / 2;
+    const topY = h / 2 + blockH / 2 - LINE_H / 2 + VERTICAL_OFFSET;
 
     const placed: Array<{ x: number; y: number; ch: string }> = [];
     for (let li = 0; li < lines.length; li++) {
@@ -180,34 +189,57 @@ export function createLetters(
       material.uniforms.uDpr.value = d;
     },
     showText(text, nowMs) {
+      const samples = getGlyphSamples();
       const placed = layout(text, boundsX, boundsY);
-      const n = Math.min(placed.length, MAX_LETTERS);
-      for (let i = 0; i < n; i++) {
-        const p = placed[i];
-        glyph[i] = charIndex(p.ch);
-        anchorX[i] = p.x;
-        anchorY[i] = p.y;
-        posX[i] = p.x;
-        posY[i] = p.y;
-        velX[i] = 0;
-        velY[i] = 0;
-        spawnMs[i] = nowMs;
-        flipAtMs[i] = 400 + Math.random() * (DISINTEGRATE_MS - 1200);
-        flipGlyph[i] = randomBoidGlyphIndex();
-        active[i] = 1;
-        released[i] = 0;
-        flipped[i] = 0;
-        alpha[i] = 0;
-        size[i] = SIZE_TEXT;
-        positions[i * 3] = p.x;
-        positions[i * 3 + 1] = p.y;
-        positions[i * 3 + 2] = 0;
+      let idx = 0;
+      const startIdx = 0;
+      let minX = Infinity;
+      let maxX = -Infinity;
+      for (let pi = 0; pi < placed.length && idx < MAX_PARTICLES; pi++) {
+        const p = placed[pi];
+        const code = p.ch.charCodeAt(0);
+        const offsets = samples.get(code);
+        if (!offsets || offsets.length === 0) continue;
+        const n = offsets.length / 2;
+        for (let si = 0; si < n && idx < MAX_PARTICLES; si++) {
+          const dx = offsets[si * 2] * LETTER_SCALE_X;
+          const dy = offsets[si * 2 + 1] * LETTER_SCALE_Y;
+          const ax = p.x + dx;
+          const ay = p.y + dy;
+          if (ax < minX) minX = ax;
+          if (ax > maxX) maxX = ax;
+          anchorX[idx] = ax;
+          anchorY[idx] = ay;
+          posX[idx] = ax;
+          posY[idx] = ay;
+          velX[idx] = 0;
+          velY[idx] = 0;
+          spawnMs[idx] = nowMs;
+          active[idx] = 1;
+          released[idx] = 0;
+          alpha[idx] = 0;
+          size[idx] = PARTICLE_SIZE;
+          glyph[idx] = DOT_GLYPH;
+          positions[idx * 3] = ax;
+          positions[idx * 3 + 1] = ay;
+          positions[idx * 3 + 2] = 0;
+          idx++;
+        }
       }
-      for (let i = n; i < count; i++) {
+      const xSpan = Math.max(1, maxX - minX);
+      const disintegrateStart = nowMs + FADE_IN_MS + SHOW_MS;
+      for (let i = startIdx; i < idx; i++) {
+        const normX = (anchorX[i] - minX) / xSpan;
+        const sweepDelay = (1 - normX) * SWEEP_MS;
+        const jitter = (Math.random() - 0.5) * 2 * RELEASE_JITTER_MS;
+        releaseMs[i] = disintegrateStart + sweepDelay + jitter;
+        fadeDur[i] = FADE_OUT_MS * (0.85 + Math.random() * 0.3);
+      }
+      for (let i = idx; i < count; i++) {
         active[i] = 0;
         alpha[i] = 0;
       }
-      count = Math.max(count, n);
+      count = Math.max(count, idx);
       geom.setDrawRange(0, count);
       posAttr.needsUpdate = true;
       glyphAttr.needsUpdate = true;
@@ -219,7 +251,7 @@ export function createLetters(
       const scaledDelta = deltaSec * 0.75;
       const baseScale = 0.5 * 40;
       const swirlScale = 14.0;
-      const speedLimit = 4.5;
+      const speedLimit = 6.0;
       const posScale = scaledDelta * 60;
       const bwx = baseWind[0];
       const bwy = baseWind[1];
@@ -235,14 +267,26 @@ export function createLetters(
           dirty = true;
           continue;
         }
-        if (age < FADE_IN_MS + SHOW_MS) {
+
+        if (nowMs < releaseMs[i]) {
           if (alpha[i] !== 1) {
             alpha[i] = 1;
             dirty = true;
           }
           continue;
         }
-        if (age >= TOTAL_MS) {
+
+        if (!released[i]) {
+          const a = Math.random() * Math.PI * 2;
+          const s = IMPULSE_MIN + Math.random() * IMPULSE_RANGE;
+          velX[i] = Math.cos(a) * s;
+          velY[i] = Math.sin(a) * s + 0.4;
+          released[i] = 1;
+        }
+
+        const releasedAge = nowMs - releaseMs[i];
+        const t = releasedAge / fadeDur[i];
+        if (t >= 1) {
           if (alpha[i] !== 0) {
             alpha[i] = 0;
             active[i] = 0;
@@ -251,34 +295,13 @@ export function createLetters(
           continue;
         }
 
-        const disAge = age - FADE_IN_MS - SHOW_MS;
-        const t = disAge / DISINTEGRATE_MS;
-
-        if (!released[i]) {
-          const a = Math.random() * Math.PI * 2;
-          const s = 0.6 + Math.random() * 1.2;
-          velX[i] = Math.cos(a) * s;
-          // slight upward bias (y-up) — reads as "let go"
-          velY[i] = Math.sin(a) * s + 0.9;
-          released[i] = 1;
-        }
-
-        if (!flipped[i] && disAge >= flipAtMs[i]) {
-          glyph[i] = flipGlyph[i];
-          flipped[i] = 1;
-        }
-
-        size[i] = SIZE_TEXT + (SIZE_BOID - SIZE_TEXT) * t;
-        alpha[i] = 1 - t;
-
-        // match GLSL swirl exactly so letters ride the flock's field
         const x = posX[i];
         const y = posY[i];
-        const sa = Math.sin(x * 0.011 + timeSec * 0.6) *
-          Math.cos(y * 0.009 - timeSec * 0.45);
-        const sb = Math.cos(x * 0.008 - timeSec * 0.5) *
-          Math.sin(y * 0.012 + timeSec * 0.35);
-        const sc = Math.sin((x + y) * 0.006 + timeSec * 0.25);
+        const sa = Math.sin(x * 0.009 + timeSec * 0.22) *
+          Math.cos(y * 0.007 - timeSec * 0.16);
+        const sb = Math.cos(x * 0.006 - timeSec * 0.2) *
+          Math.sin(y * 0.01 + timeSec * 0.13);
+        const sc = Math.sin((x + y) * 0.005 + timeSec * 0.09);
         const swirlX = sa + sc * 0.4;
         const swirlY = sb - sc * 0.4;
 
@@ -298,12 +321,12 @@ export function createLetters(
         posY[i] = y + vy * posScale;
         positions[i * 3] = posX[i];
         positions[i * 3 + 1] = posY[i];
+        alpha[i] = 1 - t;
         dirty = true;
       }
 
       if (dirty) {
         posAttr.needsUpdate = true;
-        glyphAttr.needsUpdate = true;
         alphaAttr.needsUpdate = true;
         sizeAttr.needsUpdate = true;
       }
