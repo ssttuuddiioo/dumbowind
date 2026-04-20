@@ -4,30 +4,38 @@ import {
   LETTER_GLYPH_COUNT,
 } from "./letterAtlas";
 import { getGlyphSamples } from "./glyphSamples";
+import { layoutTyping } from "./textLayout";
 
 const MAX_PARTICLES = 8000;
-const CELL_W = 44;
-const LINE_H = 92;
-const VERTICAL_OFFSET = 200;
 const LETTER_SCALE_X = 44;
 const LETTER_SCALE_Y = 62;
 const PARTICLE_SIZE = 5;
 const DOT_GLYPH = BOID_GLYPH_OFFSET + 7;
 
-const FADE_IN_MS = 600;
-const SHOW_MS = 800;
+const TYPE_FADE_IN_MS = 180;
 const SWEEP_MS = 2000;
 const FADE_OUT_MS = 1100;
 const RELEASE_JITTER_MS = 220;
-const TOTAL_MS =
-  FADE_IN_MS + SHOW_MS + SWEEP_MS + FADE_OUT_MS + RELEASE_JITTER_MS;
+const RELEASE_TOTAL_MS = SWEEP_MS + FADE_OUT_MS + RELEASE_JITTER_MS;
 
 const IMPULSE_MIN = 1.4;
 const IMPULSE_RANGE = 1.8;
 
+const RELEASE_PENDING = Number.POSITIVE_INFINITY;
+
+type TypingEntry = {
+  charIdx: number;
+  ch: string;
+  x: number;
+  y: number;
+  slotStart: number;
+  slotCount: number;
+};
+
 export type LettersHandle = {
   points: THREE.Points;
-  showText(text: string, nowMs: number): void;
+  setTypingText(text: string, nowMs: number): { x: number; y: number };
+  release(nowMs: number): void;
   update(
     deltaSec: number,
     timeSec: number,
@@ -37,6 +45,7 @@ export type LettersHandle = {
   isBusy(nowMs: number): boolean;
   setBounds(w: number, h: number): void;
   setDpr(dpr: number): void;
+  getCursor(): { x: number; y: number };
   dispose(): void;
 };
 
@@ -131,51 +140,98 @@ export function createLetters(
   const fadeDur = new Float32Array(MAX_PARTICLES);
   const active = new Uint8Array(MAX_PARTICLES);
   const released = new Uint8Array(MAX_PARTICLES);
-  let count = 0;
+  for (let i = 0; i < MAX_PARTICLES; i++) releaseMs[i] = RELEASE_PENDING;
+
+  let drawCount = 0;
   let boundsX = bounds[0];
   let boundsY = bounds[1];
 
-  function layout(text: string, w: number, h: number) {
-    const maxLineWidth = Math.min(w * 0.9, 1600);
-    const maxCols = Math.max(8, Math.floor(maxLineWidth / CELL_W));
-    const words = text.split(/\s+/).filter(Boolean);
-    const lines: string[] = [];
-    let cur = "";
-    for (const word of words) {
-      let w2 = word;
-      while (w2.length > maxCols) {
-        if (cur) {
-          lines.push(cur);
-          cur = "";
-        }
-        lines.push(w2.slice(0, maxCols));
-        w2 = w2.slice(maxCols);
-      }
-      if (!cur) cur = w2;
-      else if (cur.length + 1 + w2.length <= maxCols) cur += " " + w2;
-      else {
-        lines.push(cur);
-        cur = w2;
+  let typingEntries: TypingEntry[] = [];
+  let releasing = false;
+  let cursor = { x: boundsX / 2, y: boundsY / 2 };
+
+  function spawnEntry(
+    ch: string,
+    x: number,
+    y: number,
+    charIdx: number,
+    nowMs: number,
+  ): TypingEntry | null {
+    const samples = getGlyphSamples();
+    const offsets = samples.get(ch.charCodeAt(0));
+    if (!offsets || offsets.length === 0) return null;
+    const nPts = offsets.length / 2;
+
+    let start = -1;
+    let need = nPts;
+    let run = 0;
+    for (let i = 0; i < MAX_PARTICLES; i++) {
+      if (!active[i]) {
+        if (run === 0) start = i;
+        run++;
+        if (run === need) break;
+      } else {
+        run = 0;
+        start = -1;
       }
     }
-    if (cur) lines.push(cur);
+    if (run !== need || start < 0) return null;
 
-    const blockH = lines.length * LINE_H;
-    const topY = h / 2 + blockH / 2 - LINE_H / 2 + VERTICAL_OFFSET;
-
-    const placed: Array<{ x: number; y: number; ch: string }> = [];
-    for (let li = 0; li < lines.length; li++) {
-      const line = lines[li];
-      const lineW = line.length * CELL_W;
-      const leftX = w / 2 - lineW / 2 + CELL_W / 2;
-      const y = topY - li * LINE_H;
-      for (let ci = 0; ci < line.length; ci++) {
-        const ch = line[ci];
-        if (ch === " ") continue;
-        placed.push({ x: leftX + ci * CELL_W, y, ch });
-      }
+    for (let si = 0; si < nPts; si++) {
+      const slot = start + si;
+      const dx = offsets[si * 2] * LETTER_SCALE_X;
+      const dy = offsets[si * 2 + 1] * LETTER_SCALE_Y;
+      anchorX[slot] = x + dx;
+      anchorY[slot] = y + dy;
+      posX[slot] = anchorX[slot];
+      posY[slot] = anchorY[slot];
+      velX[slot] = 0;
+      velY[slot] = 0;
+      spawnMs[slot] = nowMs;
+      releaseMs[slot] = RELEASE_PENDING;
+      fadeDur[slot] = FADE_OUT_MS;
+      active[slot] = 1;
+      released[slot] = 0;
+      alpha[slot] = 0;
+      size[slot] = PARTICLE_SIZE;
+      glyph[slot] = DOT_GLYPH;
+      positions[slot * 3] = anchorX[slot];
+      positions[slot * 3 + 1] = anchorY[slot];
+      positions[slot * 3 + 2] = 0;
     }
-    return placed;
+    if (start + nPts > drawCount) drawCount = start + nPts;
+    return { charIdx, ch, x, y, slotStart: start, slotCount: nPts };
+  }
+
+  function deactivateEntry(entry: TypingEntry) {
+    for (let s = entry.slotStart; s < entry.slotStart + entry.slotCount; s++) {
+      active[s] = 0;
+      alpha[s] = 0;
+    }
+  }
+
+  function shiftEntry(entry: TypingEntry, nx: number, ny: number) {
+    const dx = nx - entry.x;
+    const dy = ny - entry.y;
+    if (dx === 0 && dy === 0) return;
+    for (let s = entry.slotStart; s < entry.slotStart + entry.slotCount; s++) {
+      anchorX[s] += dx;
+      anchorY[s] += dy;
+      posX[s] += dx;
+      posY[s] += dy;
+      positions[s * 3] = posX[s];
+      positions[s * 3 + 1] = posY[s];
+    }
+    entry.x = nx;
+    entry.y = ny;
+  }
+
+  function markAttrsDirty() {
+    geom.setDrawRange(0, drawCount);
+    posAttr.needsUpdate = true;
+    glyphAttr.needsUpdate = true;
+    alphaAttr.needsUpdate = true;
+    sizeAttr.needsUpdate = true;
   }
 
   return {
@@ -188,66 +244,65 @@ export function createLetters(
     setDpr(d) {
       material.uniforms.uDpr.value = d;
     },
-    showText(text, nowMs) {
-      const samples = getGlyphSamples();
-      const placed = layout(text, boundsX, boundsY);
-      let idx = 0;
-      const startIdx = 0;
-      let minX = Infinity;
-      let maxX = -Infinity;
-      for (let pi = 0; pi < placed.length && idx < MAX_PARTICLES; pi++) {
-        const p = placed[pi];
-        const code = p.ch.charCodeAt(0);
-        const offsets = samples.get(code);
-        if (!offsets || offsets.length === 0) continue;
-        const n = offsets.length / 2;
-        for (let si = 0; si < n && idx < MAX_PARTICLES; si++) {
-          const dx = offsets[si * 2] * LETTER_SCALE_X;
-          const dy = offsets[si * 2 + 1] * LETTER_SCALE_Y;
-          const ax = p.x + dx;
-          const ay = p.y + dy;
-          if (ax < minX) minX = ax;
-          if (ax > maxX) maxX = ax;
-          anchorX[idx] = ax;
-          anchorY[idx] = ay;
-          posX[idx] = ax;
-          posY[idx] = ay;
-          velX[idx] = 0;
-          velY[idx] = 0;
-          spawnMs[idx] = nowMs;
-          active[idx] = 1;
-          released[idx] = 0;
-          alpha[idx] = 0;
-          size[idx] = PARTICLE_SIZE;
-          glyph[idx] = DOT_GLYPH;
-          positions[idx * 3] = ax;
-          positions[idx * 3 + 1] = ay;
-          positions[idx * 3 + 2] = 0;
-          idx++;
+    getCursor() {
+      return { x: cursor.x, y: cursor.y };
+    },
+    setTypingText(text, nowMs) {
+      if (releasing) {
+        const result = layoutTyping(text, boundsX, boundsY);
+        cursor = result.cursor;
+        return cursor;
+      }
+
+      const result = layoutTyping(text, boundsX, boundsY);
+      cursor = result.cursor;
+      const placed = result.placed;
+
+      const newEntries: TypingEntry[] = [];
+      for (let i = 0; i < placed.length; i++) {
+        const p = placed[i];
+        const existing = typingEntries[i];
+        if (existing && existing.charIdx === p.charIdx && existing.ch === p.ch) {
+          shiftEntry(existing, p.x, p.y);
+          newEntries.push(existing);
+        } else {
+          if (existing) deactivateEntry(existing);
+          const fresh = spawnEntry(p.ch, p.x, p.y, p.charIdx, nowMs);
+          if (fresh) newEntries.push(fresh);
         }
       }
+      for (let i = placed.length; i < typingEntries.length; i++) {
+        deactivateEntry(typingEntries[i]);
+      }
+      typingEntries = newEntries;
+
+      markAttrsDirty();
+      return cursor;
+    },
+    release(nowMs) {
+      if (releasing) return;
+      releasing = true;
+
+      let minX = Infinity;
+      let maxX = -Infinity;
+      for (let i = 0; i < drawCount; i++) {
+        if (!active[i]) continue;
+        if (anchorX[i] < minX) minX = anchorX[i];
+        if (anchorX[i] > maxX) maxX = anchorX[i];
+      }
       const xSpan = Math.max(1, maxX - minX);
-      const disintegrateStart = nowMs + FADE_IN_MS + SHOW_MS;
-      for (let i = startIdx; i < idx; i++) {
+
+      for (let i = 0; i < drawCount; i++) {
+        if (!active[i]) continue;
         const normX = (anchorX[i] - minX) / xSpan;
         const sweepDelay = (1 - normX) * SWEEP_MS;
         const jitter = (Math.random() - 0.5) * 2 * RELEASE_JITTER_MS;
-        releaseMs[i] = disintegrateStart + sweepDelay + jitter;
+        releaseMs[i] = nowMs + sweepDelay + jitter;
         fadeDur[i] = FADE_OUT_MS * (0.85 + Math.random() * 0.3);
       }
-      for (let i = idx; i < count; i++) {
-        active[i] = 0;
-        alpha[i] = 0;
-      }
-      count = Math.max(count, idx);
-      geom.setDrawRange(0, count);
-      posAttr.needsUpdate = true;
-      glyphAttr.needsUpdate = true;
-      alphaAttr.needsUpdate = true;
-      sizeAttr.needsUpdate = true;
     },
     update(deltaSec, timeSec, baseWind, nowMs) {
-      if (count === 0) return;
+      if (drawCount === 0) return;
       const scaledDelta = deltaSec * 0.75;
       const baseScale = 0.5 * 40;
       const swirlScale = 14.0;
@@ -257,13 +312,15 @@ export function createLetters(
       const bwy = baseWind[1];
 
       let dirty = false;
+      let anyActive = false;
 
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < drawCount; i++) {
         if (!active[i]) continue;
+        anyActive = true;
         const age = nowMs - spawnMs[i];
 
-        if (age < FADE_IN_MS) {
-          alpha[i] = age / FADE_IN_MS;
+        if (age < TYPE_FADE_IN_MS) {
+          alpha[i] = age / TYPE_FADE_IN_MS;
           dirty = true;
           continue;
         }
@@ -325,17 +382,20 @@ export function createLetters(
         dirty = true;
       }
 
+      if (releasing && !anyActive) {
+        releasing = false;
+        typingEntries = [];
+        drawCount = 0;
+      }
+
       if (dirty) {
         posAttr.needsUpdate = true;
         alphaAttr.needsUpdate = true;
         sizeAttr.needsUpdate = true;
       }
     },
-    isBusy(nowMs) {
-      for (let i = 0; i < count; i++) {
-        if (active[i] && nowMs - spawnMs[i] < TOTAL_MS) return true;
-      }
-      return false;
+    isBusy(_nowMs) {
+      return releasing;
     },
     dispose() {
       geom.dispose();
@@ -343,3 +403,5 @@ export function createLetters(
     },
   };
 }
+
+export const LETTERS_RELEASE_TOTAL_MS = RELEASE_TOTAL_MS;

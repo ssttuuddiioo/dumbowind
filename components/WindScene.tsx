@@ -8,15 +8,18 @@ import { createSimulation, type SimulationHandle } from "@/lib/boids/simulation"
 import { createGlyphAtlas } from "@/lib/boids/atlas";
 import { createGlyphSprites } from "@/lib/boids/sprites";
 import { createLetterAtlas } from "@/lib/boids/letterAtlas";
-import { createLetters } from "@/lib/boids/letters";
+import { createLetters, type LettersHandle } from "@/lib/boids/letters";
 
 const FRAME_MS = 1000 / 30;
-const POLL_MS = 2000;
 
-type Item = { id: string; text: string; ts: number };
+type Props = {
+  typingText: string;
+  releaseTick: number;
+};
 
-export function WindScene() {
+export function WindScene({ typingText, releaseTick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const lettersRef = useRef<LettersHandle | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -54,6 +57,7 @@ export function WindScene() {
 
     const letterAtlas = createLetterAtlas();
     const letters = createLetters(letterAtlas, [width, height], dpr);
+    lettersRef.current = letters;
 
     const scene = new THREE.Scene();
     scene.add(sprites.points);
@@ -71,29 +75,6 @@ export function WindScene() {
       letters.setBounds(width, height);
     };
     window.addEventListener("resize", onResize);
-
-    const pending: string[] = [];
-    let lastTs = Date.now();
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const res = await fetch(`/api/release?since=${lastTs}`, {
-          cache: "no-store",
-        });
-        if (!res.ok) return;
-        const data = (await res.json()) as { items?: Item[] };
-        if (cancelled || !data.items?.length) return;
-        for (const it of data.items) {
-          if (it.ts > lastTs) lastTs = it.ts;
-          pending.push(it.text);
-        }
-      } catch {
-        // ignore transient network errors
-      }
-    };
-    poll();
-    const pollId = window.setInterval(poll, POLL_MS);
 
     let raf = 0;
     let last = 0;
@@ -114,10 +95,6 @@ export function WindScene() {
       const wind: [number, number] = [slowX + gustX, slowY + gustY];
       sim.compute(delta * 0.75, t, wind);
 
-      if (pending.length && !letters.isBusy(now)) {
-        const text = pending.shift()!;
-        letters.showText(text, now);
-      }
       letters.update(delta, t, wind, now);
 
       sprites.material.uniforms.uPosition.value = sim.getPositionTexture();
@@ -131,10 +108,9 @@ export function WindScene() {
     raf = requestAnimationFrame(tick);
 
     return () => {
-      cancelled = true;
       cancelAnimationFrame(raf);
-      window.clearInterval(pollId);
       window.removeEventListener("resize", onResize);
+      lettersRef.current = null;
       sim.dispose();
       atlas.dispose();
       sprites.material.dispose();
@@ -146,5 +122,18 @@ export function WindScene() {
     };
   }, []);
 
-  return <div ref={containerRef} className="fixed inset-0 bg-ink" />;
+  useEffect(() => {
+    const letters = lettersRef.current;
+    if (!letters) return;
+    letters.setTypingText(typingText, performance.now());
+  }, [typingText]);
+
+  useEffect(() => {
+    if (releaseTick === 0) return;
+    const letters = lettersRef.current;
+    if (!letters) return;
+    letters.release(performance.now());
+  }, [releaseTick]);
+
+  return <div ref={containerRef} className="fixed inset-0 bg-ink pointer-events-none" />;
 }

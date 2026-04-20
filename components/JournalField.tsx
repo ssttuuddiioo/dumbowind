@@ -1,46 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
-type Phase = "field" | "thanks";
+type Props = {
+  text: string;
+  phase: "field" | "released";
+  onTextChange: (text: string) => void;
+  onSubmit: () => void;
+};
 
-export function JournalField() {
-  const [text, setText] = useState("");
-  const [phase, setPhase] = useState<Phase>("field");
+export function JournalField({ text, phase, onTextChange, onSubmit }: Props) {
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (phase === "field") taRef.current?.focus();
   }, [phase]);
 
-  useEffect(() => {
-    const el = taRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = el.scrollHeight + "px";
-  }, [text, phase]);
-
-  const submit = useCallback(async () => {
-    const value = text.trim();
-    if (!value) return;
-    fetch("/api/release", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: value }),
-    }).catch(() => {});
-    setPhase("thanks");
-    window.setTimeout(() => {
-      setText("");
-      setPhase("field");
-    }, 3000);
-  }, [text]);
-
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      submit();
+      onSubmit();
     }
   };
+
+  const focusField = () => taRef.current?.focus();
 
   return (
     <div className="w-full max-w-md mx-auto relative">
@@ -49,24 +32,17 @@ export function JournalField() {
           phase === "field" ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >
-        <p className="text-bone/50 text-sm sm:text-[15px] mb-5 leading-snug select-none">
-          what do you want to let go of?
-        </p>
         <div
-          className="relative text-base sm:text-lg leading-snug"
-          onClick={() => taRef.current?.focus()}
+          className="cursor-text text-center"
+          onClick={focusField}
         >
-          <div
-            aria-hidden
-            className="whitespace-pre-wrap break-words min-h-[1.5em]"
-          >
-            {text}
-            <span className="blink-cursor text-royal">█</span>
-          </div>
+          <p className="text-bone/80 text-xl sm:text-[22px] leading-snug select-none">
+            what do you want to let go of?
+          </p>
           <textarea
             ref={taRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => onTextChange(e.target.value)}
             onKeyDown={onKeyDown}
             rows={1}
             spellCheck={false}
@@ -76,7 +52,7 @@ export function JournalField() {
             maxLength={280}
             disabled={phase !== "field"}
             aria-label="what do you want to let go of?"
-            className="absolute inset-0 w-full h-full resize-none bg-transparent outline-none border-0 p-0 leading-snug overflow-hidden"
+            className="block w-full h-10 mt-4 bg-transparent resize-none outline-none border-0 p-0 text-center"
             style={{
               color: "transparent",
               caretColor: "transparent",
@@ -85,22 +61,16 @@ export function JournalField() {
             }}
           />
         </div>
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!text.trim() || phase !== "field"}
-          className="mt-5 text-sm sm:text-base text-royal hover:opacity-80 transition-opacity disabled:text-bone/25 disabled:cursor-default"
-        >
-          release ↵
-        </button>
-      </div>
-      <div
-        aria-hidden={phase !== "thanks"}
-        className={`absolute inset-0 flex items-start transition-opacity duration-700 ease-out ${
-          phase === "thanks" ? "opacity-100" : "opacity-0 pointer-events-none"
-        }`}
-      >
-        <p className="text-bone/70 text-base sm:text-lg">released.</p>
+        <div className="flex justify-center mt-3">
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={!text.trim() || phase !== "field"}
+            className="text-xl sm:text-2xl text-royal hover:opacity-80 transition-opacity disabled:text-bone/25 disabled:cursor-default"
+          >
+            release ↵
+          </button>
+        </div>
       </div>
     </div>
   );
