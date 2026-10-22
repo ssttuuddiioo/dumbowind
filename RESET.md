@@ -31,11 +31,13 @@ The local relay only works in a single server process. It will not work on Verce
 
 ## Supabase
 
+The demo uses the existing `small-apps` project (`tyvecwkxxosxlmsgeywt`). The migration below has already been applied there.
+
 1. Run `supabase/migrations/20261022000000_reset_america.sql` on the project. It creates `reset_counter`, `reset_presses`, and `increment_reset()`. Change the seed number in the file before launch.
 2. Set the env vars (locally in `.env.local`, and in Vercel):
 
 ```
-NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_URL=https://tyvecwkxxosxlmsgeywt.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon or publishable key>   # Realtime channels
 SUPABASE_SERVICE_ROLE_KEY=<service role key>              # server only, for the count
 ```
